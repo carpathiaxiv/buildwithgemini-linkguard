@@ -170,13 +170,50 @@ function renderReply(b, parts) {
   const texts = parts.filter(p => p && (p.kind === "text" || (!p.kind && p.text))).map(p => p.text || "");
   const a2ui = parts.filter(p => p && p.kind === "a2ui" && p.data).map(p => p.data);
 
-  const textStr = texts.join("\n").trim();
-  if (textStr) b.appendChild(el("div", null, textStr));
-
   if (a2ui.length) {
     b.classList.add("rich");
     if (!renderSurface(a2ui, b)) b.appendChild(el("div", null, flattenText(a2ui) || "(no card content)"));
   }
+
+  const textStr = texts.join("\n").trim();
+  if (textStr) {
+    // If text contains image links like ![Screenshot](https://...) or https://storage.googleapis.com/.../screenshots/...png
+    const container = el("div", null);
+    // Parse markdown images and screenshot links
+    const imgRegex = /!\[([^\]]*)\]\((https?:\/\/[^\s\)]+)\)|(https?:\/\/storage\.googleapis\.com\/[^\s\)]+\.png)/g;
+    let lastIdx = 0;
+    let match;
+    while ((match = imgRegex.exec(textStr)) !== null) {
+      if (match.index > lastIdx) {
+        const span = el("div", null, textStr.slice(lastIdx, match.index));
+        span.style.whiteSpace = "pre-wrap";
+        container.appendChild(span);
+      }
+      const imgUrl = match[2] || match[3];
+      const imgWrapper = el("div", "a2card");
+      imgWrapper.style.marginTop = "0.8rem";
+      const lbl = el("div", "a2text a2-caption", "📸 Live Page Screenshot");
+      lbl.style.marginBottom = "0.4rem";
+      lbl.style.fontWeight = "600";
+      const img = el("img", "a2img");
+      img.src = imgUrl;
+      img.alt = "Webpage Screenshot";
+      imgWrapper.appendChild(lbl);
+      imgWrapper.appendChild(img);
+      container.appendChild(imgWrapper);
+      lastIdx = match.index + match[0].length;
+    }
+    if (lastIdx < textStr.length) {
+      const remaining = textStr.slice(lastIdx);
+      if (remaining.trim()) {
+        const span = el("div", null, remaining);
+        span.style.whiteSpace = "pre-wrap";
+        container.appendChild(span);
+      }
+    }
+    b.appendChild(container);
+  }
+
   if (!b.childNodes.length) b.textContent = "(no response)";
   log.scrollTop = log.scrollHeight;
 }

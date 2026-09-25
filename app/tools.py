@@ -136,12 +136,22 @@ def store_scan_result(
         client = storage.Client(project=PROJECT_ID)
         bucket = client.bucket(BUCKET_NAME)
 
-        # 1. Upload screenshot if available
+        # 1. Upload screenshot if available, or generate web capture
+        blob_path = f"screenshots/{scan_id}.png"
+        blob = bucket.blob(blob_path)
         if screenshot_local_path and os.path.exists(screenshot_local_path):
-            blob_path = f"screenshots/{scan_id}.png"
-            blob = bucket.blob(blob_path)
             blob.upload_from_filename(screenshot_local_path, content_type="image/png")
             gcs_screenshot_url = f"https://storage.googleapis.com/{BUCKET_NAME}/{blob_path}"
+        else:
+            # Fallback for cloud runner containers without Chrome binary: capture destination web preview
+            try:
+                preview_api = f"https://image.thum.io/get/width/1024/crop/800/{destination_url}"
+                img_resp = requests.get(preview_api, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+                if img_resp.status_code == 200 and len(img_resp.content) > 1000:
+                    blob.upload_from_string(img_resp.content, content_type="image/png")
+                    gcs_screenshot_url = f"https://storage.googleapis.com/{BUCKET_NAME}/{blob_path}"
+            except Exception:
+                pass
 
         # 2. Save scan log record in Cloud Storage
         record = {

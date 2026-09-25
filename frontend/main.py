@@ -124,6 +124,49 @@ def _extract_parts(parts: list) -> list[dict]:
     for p in parts:
         root = getattr(p, "root", p)
         if isinstance(root, TextPart) and getattr(root, "text", None):
+            txt = root.text.strip()
+            # If text contains raw A2UI JSON array or <a2ui-json> block, unpack to a2ui parts
+            if txt.startswith("[") and ("Card" in txt or "surfaceUpdate" in txt):
+                try:
+                    import json
+                    parsed = json.loads(txt)
+                    if isinstance(parsed, list):
+                        for item in parsed:
+                            if "Card" in item:
+                                # Convert nested Card to v0.8 surface
+                                card_obj = item["Card"]
+                                col_obj = card_obj.get("child", {}).get("Column", {})
+                                children = col_obj.get("children", [])
+                                comps = []
+                                cids = []
+                                for idx, ch in enumerate(children):
+                                    cid = f"comp_{idx}"
+                                    cids.append(cid)
+                                    comps.append({"id": cid, "component": ch})
+                                comps.append({"id": "main_col", "component": {"Column": {"children": {"explicitList": cids}}}})
+                                comps.append({"id": "root_card", "component": {"Card": {"child": "main_col"}}})
+                                out.append({"kind": "a2ui", "data": {"beginRendering": {"surfaceId": "default", "root": "root_card"}}})
+                                out.append({"kind": "a2ui", "data": {"surfaceUpdate": {"surfaceId": "default", "components": comps}}})
+                            elif "surfaceUpdate" in item or "beginRendering" in item:
+                                out.append({"kind": "a2ui", "data": item})
+                        continue
+                except Exception:
+                    pass
+            elif "<a2ui-json>" in txt and "</a2ui-json>" in txt:
+                try:
+                    import json
+                    start = txt.find("<a2ui-json>") + len("<a2ui-json>")
+                    end = txt.find("</a2ui-json>")
+                    parsed = json.loads(txt[start:end].strip())
+                    for item in parsed:
+                        out.append({"kind": "a2ui", "data": item})
+                    # Strip a2ui block from text
+                    clean_txt = (txt[:txt.find("<a2ui-json>")] + txt[end + len("</a2ui-json>"):])
+                    if clean_txt.strip():
+                        out.append({"kind": "text", "text": clean_txt.strip()})
+                    continue
+                except Exception:
+                    pass
             out.append({"kind": "text", "text": root.text})
         elif getattr(root, "data", None) is not None:
             meta = getattr(root, "metadata", None) or {}
