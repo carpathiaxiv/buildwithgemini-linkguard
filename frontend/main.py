@@ -230,6 +230,53 @@ async def chat(req: Request):
         # The turn produced no text or UI (e.g. the agent only ran tools, or a
         # tool stalled). Be honest rather than silent.
         parts = [{"kind": "text", "text": "(The agent didn't return a reply.)"}]
+    else:
+        # Guarantee screenshot visibility: check if any part contains an Image component or screenshot URL.
+        has_img = False
+        for p in parts:
+            if p.get("kind") == "a2ui":
+                su = p.get("data", {}).get("surfaceUpdate", {})
+                for c in su.get("components", []):
+                    if "Image" in c.get("component", {}):
+                        has_img = True
+            elif p.get("kind") == "text" and ".png" in p.get("text", ""):
+                has_img = True
+
+        # If the card omitted the Image component, fetch the latest screenshot from BigQuery or generate a web preview
+        if not has_img:
+            screenshot_url = None
+            try:
+                from google.cloud import bigquery
+                bq = bigquery.Client(project=os.environ.get("GOOGLE_CLOUD_PROJECT", "qwiklabs-gcp-04-702410113001"), location="US")
+                rows = list(bq.query("SELECT screenshot_url, destination_url FROM linkguard_data.url_scans ORDER BY timestamp DESC LIMIT 1").result())
+                if rows:
+                    raw_shot = (rows[0].screenshot_url or "").strip()
+                    if raw_shot.startswith("http"):
+                        screenshot_url = raw_shot
+                    elif rows[0].destination_url:
+                        dest = rows[0].destination_url
+                        screenshot_url = f"https://image.thum.io/get/width/1024/crop/800/{dest}"
+            except Exception as e:
+                print("Error getting screenshot:", e)
+
+            if screenshot_url:
+                injected = False
+                for p in parts:
+                    if p.get("kind") == "a2ui" and "surfaceUpdate" in p.get("data", {}):
+                        su = p["data"]["surfaceUpdate"]
+                        comps = su.get("components", [])
+                        img_id = f"comp_{len(comps)}"
+                        comps.append({"id": img_id, "component": {"Image": {"url": {"literalString": screenshot_url}}}})
+                        for c in comps:
+                            if "Column" in c.get("component", {}):
+                                col_ch = c["component"]["Column"].get("children", {})
+                                if isinstance(col_ch, dict) and "explicitList" in col_ch:
+                                    col_ch["explicitList"].append(img_id)
+                                    injected = True
+                        break
+                if not injected:
+                    parts.append({"kind": "text", "text": f"\n\n![Screenshot]({screenshot_url})"})
+
     return JSONResponse({"parts": parts})
 
 
